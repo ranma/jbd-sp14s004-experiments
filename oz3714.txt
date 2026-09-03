@@ -1,0 +1,230 @@
+Registers:
+
+0x00: ??? status ???
+0x01: ADC status? read from 4364
+      func checks bit6
+      bit0: maybe indsg_flag
+      bit1: probably cacd_trigger_flag
+      bit2: probably conse_cadc_rdy_flag
+      bit6: trigger_scan_flag?  (bit5 in OZ3717 STATUS reg 0x5e)
+      Similar to STR2 (reg 0x61) in OZ3717 doc?
+0x03: read from 4b88, masked against 0x1f
+      check for OC flagS?
+      From OZ3717 STATUS reg 0x5f doc:
+        bit0: scp_flag
+        bit1: doc2_flag
+        bit2: doc1_flag
+        bit3: cocp_flag
+        bit4: ovp_flag
+0x01..0x04: config/ALERTN
+0x01 and 0x03 read and then written if != 0 in 7be8 (clear irq status?)
+0x05..0x0e: contain settings for protection parameters and basic operating conditions
+0x0b: The EFETC operating mode is set via the PWMEFETC register 0x0B.
+0x0c: It is recommended to write 0x0b to disable wkup and efetc functions.
+0x0a: Similar to "DOCSC" (reg 0x52 in OZ3717), written with DSGOC values in 44d4
+0x0f: Write 0x3714 to unlock 0x05..0x0e. Any other value will set unlock_cfg_wrt to 0.
+      bit0: unlock_cfg_wrt (1 if currently unlocked, checked at 44d4)
+0x10: FET state (updated @7be8)
+      bit0: CFET
+      bit1: DFET
+      bit4: cfet-related state (protection-engine fet state?)
+      bit5: dfet-related state (protection-engine fet state?)
+0x11: CRRTSEL (constant current selection for thermistor measurement)
+      Written 1 or 2 at @4330
+        bits from OZZ3717 reg 0x5a
+        bit0-1: thm_crrt_sel
+          "01" select 20uA (low temperature range)
+          "10" select 120uA (high temperature range)
+0x12: read from 4b88, checked for bitmask 0010011100000000, then triggers SADC 0x35 write of value 0xe0 (CTO detect?)
+0x13: read from 69f8, checked for !=0, then write reg 0x15 a second time
+0x15: cell balance bitmask? cleared/written in func @0x69f8
+0x16: Power supply mode (0x3714 to unlock, 0xdeed to shutdown, 0xabba to sleep, 0xbccb sleep without VMCU output
+0x17: Current measurement (7.81uV at 16bit resolution; 10:1 ADC gain; LSB = (312.5uV/4)/10 = 7.81uV
+      read after checking bit2 in 0x01 status reg
+0x21..0x2e: Cell voltage during CTO detection
+0x35: TRIG: Contains trigger_req will trigger a scan (updated @4330)
+      0x6N: Scan balance lead channel N (0 <= N < 15)
+      0x7N: Scan NTC/other?
+      0xE0: Init? Cell-tap-open detect?
+        bits from OZ3717 reg 0x5f "TRIG R/W":
+        bit0-4: Trigger channel
+          Deduced channels from OZ3714 code and OZ3717 sheet:
+          0: do nothing
+          1-14: cell tap channels
+          15: THM0
+          16: THM1
+          17: ?Internal temp?
+        bit5: Cell-tap-open detection
+        bit6: 0 for one measurement, 1 for eight measuremnts
+        bit7: trigger_scan_req, 1 to trigger, auto-clear (sets trigger_scan_flag (bit5) in STATUS reg 0x5e)
+0x36: Almost certainly 16bit SADC result (read @4364)
+0x38: "CADCTRL" Configures CADC (coulomb counter); Two operating modes: single-trigger conversion and continuous conversion.  Current DeadBand setting, meaning that when the current is less than the set value, it is not included in the coulomb counter capacitance calculation. This can be set in register 0x38, cadc_db_th[5:0].
+      0x9b written in init func @44d4
+        -> 10011011
+      0x2 written in 5bd0, then waits for bit1 in reg 0x1 to get set
+      Bits from OZ3717 reg 0x30 "CADCTRL":
+        bit0-1: sw_cadc_ctrl[1:0]
+          00: sigma-delta ADC disabled
+          01: reserved
+          10: single-trigger, auto-clear to "00" once finished, also sets "cadc_trigger_flag" to "1"
+          11: reserved
+        bit2: hi_acy_mode
+        bit3: conse_cadc_rdy_enable
+        bit4: cc_always_enable ("perform coulomb counting")
+        bit5-6: n/a
+        bit7: hw_cadc_ctrl (default 1, tunes cadc performance)
+0x39: CMDATA: CADC result for single-trigger, read from 5bd0 func
+0x40..0x4e: Virtual reg for On-demand voltage ADC
+0x55..0x5f: Additional ADC? e.g. NTC temperature, pack voltage?
+0x60..0x6e: Channel-scan results
+0x75..0x7f: Channel-scan results
+
+
+Fun @0x44d4:
+ Write 0x38 = 0
+ Write 0x0f = 0x3714  // MAPR
+ Write 0x02 = 0       // IER1
+ Write 0x04 = 0xf     // IER2
+ Write 0x05 = 0xc000  // UVPR
+ Write 0x06 = 0xc000  // UVSHUTDOWN
+ Write 0x07 = 0xc0ff  // OVPR
+ Write 0x08 = 0x7fff  // DOC1PR
+ Write 0x0d = 0       // STLCFG
+ Write 0x09 = 0x03ff  // COCPR
+ Write 0x0a = 0x8000 | val  // DOC2PR
+ Write 0x0e = 0       // SCANCTL
+ Write 0x38 = 0x9b    // CADCRTL
+ Write 0x0b = 0       // PWMEFETC
+ Write 0x15 = 0       // CBCTRL
+ Read  0x01  // irq status?
+ Read  0x03  // irq status?
+ Write 0x11 = 2       // CRRTSEL
+ Write 0x0f = 0
+
+SAR ADC: 14-bit SAR ADC, multi-channel ADC, 16-bit single-port output data (selectable single-pass and eight-pass modes)
+
+In single-pass conversion mode, the effective LSB = 312.5uV, and the readable LSB = 78.125uV, which is 4 times the effective LSB. The lowest two LSB bits are invalid.
+
+In eight-pass continuous conversion mode, the effective LSB = 78.125uV, and all 16 bits of data are valid.
+
+Note that the SAR ADC has a gain/attenuation function for measuring high/low voltages. The gain ratio is shown in the figure below:
+- Cell voltage:    1:2  gain, LSB  156.25  uV
+- Current channel: 1:10 gain, LSB    7.8125uV
+- Temperature:     1:1  gain, LSB   78.125 uV
+- VMCU, V5A:       4:1  gain, LSB  312.5   uV
+- VBAT, VCC, VM:   40:1 gain, LSB 3125.0   uV
+
+
+14-bit Analog to Digital Converter (SAR ADC)
+ High precision voltage measurement
+ Cell Voltage: 14 inputs, typical 5mV accuracy
+ Pack Current Sense
+ VBAT, VCC, VM, V5A and VMCU Voltage measurements
+ 2 External Temperature inputs with 2 selectable precision current sources
+ 1 Internal Temperature input
+
+16-bit Analog to Digital Converter (Σ∆ ADC)
+ High precision current measurement and Coulomb counting (support dead band setting)
+
+Protection
+ Over-Voltage Protection
+ Under-Voltage Protection (UVP)
+ Discharge Current Protection
+o Discharge-Over-Current 1 (DOC1):
+o Discharge-Over-Current 2 (DOC2):
+o Short-Circuit (SC): Cycle by cycle OC/SC protection in PWM mode
+ Charge Current Protection
+ Internal Die Over-Temperature Protection
+ Simultaneous Multi-Cell Balance Support
+ Cell-Tap-Open (CTO) Detection Support
+ Integrated low-side CHG/DSG driver
+ I2C Bus Interface
+ Interrupt output to external Host
+ Low Power Consumption
+ Active mode: < 120µA (typical)
+ Sleep mode: < 12µA (typical)
+ Shutdown mode: < 1.6µA (typical)
+
+OZ3714 integrates a simple, standalone safety engine that performs high accuracy and high reliability
+protections for the safety events including OVP, UVP, COC, DOC (DOC1 and DOC2) and SC. OVP, UVP, 
+43
+COC and DOC1 are fast SAR ADC based protection. DOC2 and SCP are performed by individual analog
+comparators for quick response and any fault of them will turn off discharge NFET quickly by pulling DSG
+low and activates ALERTN pin to notify the Host microcontroller of a safety event. 
+
+III. Register Configuration Guide
+
+1. Unlocking and Writing Registers: Writing 0x3714 to register 0F sets unlock_cfg_wrt to 1, allowing configuration of registers 05~0E. Registers 05~0E contain settings for protection parameters and basic operating conditions. After configuring registers 05~0E, writing any value will set unlock_cfg_wrt to 0.
+
+2. Register 0X16 is for power supply mode settings. Writing 0x3714 unlocks this register, allowing write operations. ① Writing 0xDEED will enter shutdown mode; ② Writing 0xABBA will enter sleep mode with no output from the VMCU; ③ Writing 0xBCCB will enter sleep mode with output from the VMCU.
+
+3. Writing 0x01 to register 0E enables auto-scan, scan-rate=125ms, auto_one acquires the ADC value once per channel.
+
+4. Register 0X38 configures the CADC, i.e., the coulomb counter capacity calculation. Refer to the detailed explanation in the ADC section for specifics.
+
+5. To enable the MOSFET, write 0x03 to 0x10, i.e., set sw_chg_ctrl/sw_dsg_ctrl to 1. If the MOSFET is still not enabled, check if mcu_timeout_flag is 1 and set it to 0. (It is recommended to write 0x0b to 0x0c to disable wkup and efetc functions.)
+
+6. Configuring 0x01~0x04 configures the ALERT output status. If the interrupt function of 0x02 and 0x04 is enabled, setting the corresponding flag to 1 will pull ALERT (normally high) low, outputting an interrupt to the MCU.
+
+☆Note: Register settings are somewhat complex. Only the basic settings are highlighted to ensure the normal operation of the OZ3714. The rest requires your own understanding and configuration.
+
+Auto-Scan: (0E register enabled)
+
+The 14-bit SAR ADC measures all voltage, current, and temperature parameters @Tdet=125ms/250ms/500ms/1s, executing once. ADC channel measurement execution order: Current Channel, Cell14 Channel... Cell01 Channel, checking for current and voltage protection. A high-precision mode can be selected: performing 8 ADC measurements and calculating the average as the final ADC value.
+
+
+Trigger-Scan:
+
+Two methods for triggering the scan:
+
+1. Setting trigger_req in register 0x35 on the MCU; 2. Pulling the Alertn pin low when it is high on the MCU.
+
+The channel for trigger-scan can be selected in register 0x35. After the trigger scan is completed, it checks for voltage and current protection. A high-precision mode can also be selected: performing 8 ADC measurements and calculating the average as the final ADC value.
+
+When the OZ3714 is in auto-scan mode and executing (Tdet = 125ms~1s), upon receiving a trigger-scan command, it must wait for the auto-scan to complete before executing the trigger-scan. After execution, the trigger-scan will set the `trigg_sacn_flag` in register 0x01 to 1 to notify the MCU. When auto-scan is disabled, it will execute immediately upon receiving a trigger-scan command. Trigger-scan can also be executed in sleep mode.
+
+Channel-Scan:
+
+The OZ3714 provides several virtual registers (0x40~0x4E, 0x55~0x5F) to store the values ​​of the voltage-temperature ADC. Additionally, during CTO detection, registers 0x21~0x2E store the cell voltage, which can be read by the MCU. When the MCU reads the value of any of these registers, the OZ3714 will perform an ADC scan and send the ADC value to the MCU.
+
+Channel-Scan can be executed in both Active and Sleep modes, but it must wait for Auto-Scan to complete first.
+
+The value of Channel-Scan can be directly read from registers 0x60~0xE and 0x75~0x7F, but these values ​​are not used to determine whether a protection event has occurred.
+
+CACD (coulomb adc)
+
+Measurement range: -256mV~256mV, LSB=7.8125uV, conversion time: 125ms.
+
+Two operating modes: single-trigger conversion and continuous conversion (configurable in register 0x38).
+
+Continuous mode: The ADC measures the coulomb values ​​at ISN and ISP every 125ms, storing them in 0x3A (CCHR) and 0x3B (CCLR). The storable range is -582548uVh~582548uVh. When using a 1mR precision resistor, the calculated capacitance range is -582Ah~582Ah.
+
+The OZ3714 supports Current DeadBand setting, meaning that when the current is less than the set value, it is not included in the coulomb counter capacitance calculation. This can be set in register 0x38, cadc_db_th[5:0].
+
+3) CADC Control Register Settings (0X38)
+
+* **Sw_cadc_dither_enable:** Used to adjust ADC performance. Not recommended as it may increase ADC noise.
+
+* **cc_always_enable:** Setting this to 1 enables continuous CDC coulomb calculations. Upon receiving a single CDC trigger request, it will trigger the CDC and add the CDC value to the coulomb counter. After a single trigger, the CDC operation will automatically resume. If set to 0, CDC execution depends on the setting of `sw_cadc_ctrl`.
+
+* **Moving_average_enable:** When `cc_always_enable=1`, CDC will execute continuously, meaning there is no time interval between adjacent conversions. In this case, if `conse_cadc_rdy_enable=1` (without `hi_acy_mode` setting), once the CDC conversion is complete, the OZ3717 will average the four most recent CDC values and write them to register CMDATA (0X39), setting the flag to 1 and `conse_cadx_rdy_flag=1`.
+
+`Cadc_one_or_four`: When =0, only one sample is taken; when =1, four samples are taken and the average is calculated. This is only valid in single-trigger mode and will generate an interrupt.
+
+`sw_cadc_ctrl`: Triggers a single CADC request. After the single CADC request is completed, the setting will automatically reset to 00, and the flag will be set to 1, `cadc_trigger_flag = 1`.
+
+Key Control Pins
+
+**EFETC:** This is the input control signal for the MCU to control the DSG of the AFE. It can be configured to output active high or active low. The EFETC operating mode is set via the PWMEFETC register 0x0B.
+
+**WKUP/VM:** As a wake-up signal: When the AFE is in shutdown mode, pulling it high (type=2.8V) will wake it up.
+
+As a load detection signal: When the DFET is open and sw_load_detect_enable = 1, connecting a load will short-circuit pack+/pack- together. The current Ivm from pack+ flows into WKUP/VM (which is pulled down to ground by a 500K resistor internally), thus pulling WKUP/VM high (type=1.2V). If the load is disconnected, Ivm will cause the WKUP/VM pin to drop below Vvm-th (1V), indicating that WKUP/VM is high when a load is connected and low when the load is removed.
+
+**ALERTN:** This is an open-drain output alarm signal that requires a pull-up pull. Normally, it is high. The output interrupt signal is pulled low when an alarm signal is detected. The output state can be configured via registers 0x01~0x04. To activate the MCU by outputting a high level, PMOS level conversion logic can be used. Pulling the high-level ALERTN pin low by the MCU can also trigger ADC sampling.
+
+CHG: Besides driving the charging MOS under normal conditions, CHG can also be used as a charging wake-up pin. It detects when a charger is inserted. In shutdown mode, inserting a charger will wake the device. In sleep/active mode, CFET needs to be disconnected. With sw_chgrin_detect_enable=1, after inserting a charger, since the charger voltage is always higher than the battery voltage, this will pull the CHG pin below B- (type=-0.4V), which is interpreted as a negative voltage, thus indicating that the charger is inserted.
+
+Watchdog Timer (Recommended to disable)
+
+The watchdog timer is used to monitor the IIC status in active mode. If the MCU does not perform IIC within wkup_time[2:0], the AFE will assume that the MCU has disconnected. The AFE will generate a flag, vmcu_timeout_flag, and after 64ms, it will generate vmcu_hang_flag, turn off the DFET and CFET, and stop the auto_scan mode. If the MCU clears vmcu_timeout_flag, then vmcu_hang_flag will also be cleared, restoring normal operation.

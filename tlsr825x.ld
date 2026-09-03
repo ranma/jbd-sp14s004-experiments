@@ -1,0 +1,123 @@
+/* For now assume we are going to run entirely in RAM.
+ * First 16K RAM get loaded from flash into 0x00840000 and are mirrored into 0x00000000 as "FLASH"
+ * Second 16K RAM start start at 0x00844000.
+ * First 256 bytes may be used as TAG ram from 0x00844000 to 0x00844100.
+ */
+MEMORY
+{
+  FLASH (rx) : ORIGIN = 0x00000000, LENGTH = 0x4000 /* 16K */
+  TAG (rwx) : ORIGIN = 0x00844000, LENGTH = 0x100   /* 256B */
+  RAM (rwx) : ORIGIN = 0x00844100, LENGTH = 0x3f00  /* 16K */
+}
+
+ENTRY(__start)
+
+SECTIONS
+{
+	.text :
+	{
+		KEEP(*(.vectors))
+		*(.text*)
+
+		KEEP(*(.init))
+		KEEP(*(.fini))
+
+		/* .ctors */
+		*crtbegin.o(.ctors)
+		*crtbegin?.o(.ctors)
+		*(EXCLUDE_FILE(*crtend?.o *crtend.o) .ctors)
+		*(SORT(.ctors.*))
+		*(.ctors)
+
+		/* .dtors */
+		*crtbegin.o(.dtors)
+		*crtbegin?.o(.dtors)
+		*(EXCLUDE_FILE(*crtend?.o *crtend.o) .dtors)
+		*(SORT(.dtors.*))
+		*(.dtors)
+
+		*(.rodata*)
+
+		KEEP(*(.eh_frame*))
+	} > FLASH
+
+	__etext = .;
+
+	.data : AT (__etext)
+	{
+		__data_start__ = .;
+		*(vtable)
+		*(.data*)
+
+		. = ALIGN(4);
+		/* preinit data */
+		PROVIDE_HIDDEN (__preinit_array_start = .);
+		KEEP(*(.preinit_array))
+		PROVIDE_HIDDEN (__preinit_array_end = .);
+
+		. = ALIGN(4);
+		/* init data */
+		PROVIDE_HIDDEN (__init_array_start = .);
+		KEEP(*(SORT(.init_array.*)))
+		KEEP(*(.init_array))
+		PROVIDE_HIDDEN (__init_array_end = .);
+
+
+		. = ALIGN(4);
+		/* finit data */
+		PROVIDE_HIDDEN (__fini_array_start = .);
+		KEEP(*(SORT(.fini_array.*)))
+		KEEP(*(.fini_array))
+		PROVIDE_HIDDEN (__fini_array_end = .);
+
+		KEEP(*(.jcr*))
+		. = ALIGN(4);
+		/* All data end */
+		__data_end__ = .;
+
+	} > RAM
+
+	.bss :
+	{
+		. = ALIGN(4);
+		__bss_start__ = .;
+		*(.bss*)
+		*(COMMON)
+		. = ALIGN(4);
+		__bss_end__ = .;
+	} > RAM
+
+	.heap (COPY):
+	{
+		__end__ = .;
+		PROVIDE(end = .);
+		*(.heap*)
+		__HeapLimit = .;
+	} > RAM
+
+	/* .stack_dummy section doesn't contains any symbols. It is only
+	 * used for linker to calculate size of stack sections, and assign
+	 * values to stack symbols later */
+	.stack_dummy (COPY):
+	{
+		*(.stack*)
+	} > RAM
+
+	.pad :
+	{
+		__pad_start__ = .;
+		*(.pad*)
+		. = ALIGN(1024);
+		__pad_end__ = .;
+	} = 0xff
+
+	/* Set stack top to end of RAM, and stack limit move down by
+	 * size of stack_dummy section */
+	__StackTop = ORIGIN(RAM) + LENGTH(RAM);
+	__StackLimit = __StackTop - SIZEOF(.stack_dummy);
+	PROVIDE(__stack = __StackTop);
+
+	/* Check if data + heap + stack exceeds RAM limit */
+	ASSERT(__StackLimit >= __HeapLimit, "region RAM overflowed with stack")
+
+}
