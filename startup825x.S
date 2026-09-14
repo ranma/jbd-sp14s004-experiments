@@ -11,6 +11,7 @@
 	.global __modsi3
 	.global __udivsi3
 	.global __umodsi3
+	.global bitbang_char
 
 	.org 0
 __start:
@@ -132,4 +133,34 @@ __modsi3:
 	.align	4
 .LDIVREG:
 	.word(0x800660)
+
+	/* r0: char (incl. stop bit), r1: gpio_mask, r2: gpio_addr */
+bitbang_char:
+	tpush	{r4-r5}
+	tloadrb r4, [r2, #0] /* load gpio data */
+	tbclr	r4, r1       /* zero bit */
+	tstorerb r4, [r2, #0] /* start bit (0) */
+
+	/* bit write loop */
+	tmov	r3, #10      /* bit count */
+2:
+	/* bit delay loop */
+	tmov	r5, #62      /* ~115200 baud @ 16MHz (still needs better calibration) */
+1:
+	tsub	r5, #1
+	tjne	1b  /* bit delay loop */
+
+	tmov	r5, #1
+	tand	r5, r0 /* extract bit */
+	tneg	r5, r5 /* 1 -> 0xff */
+	tand	r5, r1 /* 0 -> 0, 0xff -> mask */
+	tor	r5, r4
+	tstorerb r5, [r2, #0]
+
+	tshftr	r0, #1
+	tsub	r3, #1
+	tjne	2b  /* bit write loop */
+
+	tpop	{r4-r5}
+	tjex	lr
 
