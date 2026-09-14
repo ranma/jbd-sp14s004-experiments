@@ -29,8 +29,8 @@ __start:
 
 	.org 0x20
 __data:
-	.word 0x00850000 /* IRQ stack top, assumes 64KiB RAM */
-	.word 0x0084fe00 /* SVC stack top, assumes 64KiB RAM */
+	.word 0x00848000 /* IRQ stack top, assumes 32KiB RAM */
+	.word 0x00847e00 /* SVC stack top, assumes 32KiB RAM */
 
 __irq:
 	tpush	{lr}
