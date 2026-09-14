@@ -121,8 +121,21 @@ int read_sync_32k_timer(void)
 	return val1;
 }
 
+extern void bitbang_char(int ch, int gpio_mask, volatile uint8_t *gpio_addr);
+
+void bitbang_putchar(int c)
+{
+	bitbang_char(c | 0x100, (1 << 1), &GPIO->PB.OUT);
+}
+
+static int early_putchar;
+
 int putchar(int c)
 {
+	if (early_putchar) {
+		bitbang_putchar(c);
+		return c;
+	}
 	while (!(UART->TXRX_STATUS & 1)); /* Wait for TX_DONE */
 	uart_tx_buf.len = 1;
 	uart_tx_buf.data[0] = c;
@@ -142,6 +155,31 @@ static void gpio_write(enum gpio_pin pin, unsigned value)
 		v &= ~(1 << idx);
 	}
 	base[ofs] = v;
+}
+
+static void gpio_wakeup(enum gpio_pin pin, int enable, int level)
+{
+	unsigned bank = pin >> 3;
+	unsigned idx = pin & 7;
+	uint8_t mask = 1 << idx;
+
+	int reg = AREG_WAKEUP_PA + bank;
+	uint8_t val = areg_read(reg);
+	if (enable) {
+		val |= mask;
+	} else {
+		val &= ~mask;
+	}
+	areg_write(reg, val);
+
+	reg = AREG_PA_POL + bank;
+	val = areg_read(reg);
+	if (level) {
+		val |= mask;
+	} else {
+		val &= ~mask;
+	}
+	areg_write(reg, val);
 }
 
 static void gpio_config(enum gpio_pin pin, enum gpio_mode mode, enum gpio_pull pull, uint8_t altmode)
@@ -213,14 +251,6 @@ void mcu_init(void)
 	MCU->RETENTION_DATA_END = 0x40;
 	MCU->TAG_DATA_END = 0x40;
 
-	/* bit7: HS  bit6:5 SRC  bit4:0 DIV
-	 * 0x43 => source 2, div 3?
-	 * SRC 0: RC24M
-	 * SRC 1: FHS MUX output
-	 * SRC 2: FHS MUX + divider
-	 * SRC 3: Doubler + 2/3 divider -> 32MHz for 24MHz XTAL
-	 */
-	SYSCTL->CLKSEL = 0x43; /* 16MHz from 24 MHz XTAL -> doubler -> div 3 */
 	/* De-assert peripheral reset */
 	SYSCTL->RST0 = 0;
 	SYSCTL->RST1 = 0;
@@ -256,6 +286,15 @@ void mcu_init(void)
 		0,
 	};
 	areg_initlist(aregs);
+
+	/* bit7: HS  bit6:5 SRC  bit4:0 DIV
+	 * 0x43 => source 2, div 3?
+	 * SRC 0: RC24M
+	 * SRC 1: FHS MUX output
+	 * SRC 2: FHS MUX + divider
+	 * SRC 3: Doubler + 2/3 divider -> 32MHz for 24MHz XTAL
+	 */
+	SYSCTL->CLKSEL = 0x43; /* 16MHz from 24 MHz XTAL -> doubler -> div 3 */
 
 	DMA->ADDRHI0123 = 0x04040404;
 	DMA->ADDRHI45_TA_A3 = 0x04040404;
@@ -313,39 +352,41 @@ void gpio_init(void)
 	/* exernal watchdog */
 	gpio_config(PD3, PIN_OUTPUT, PULL_NONE, 0);
 	/* LED */
-	gpio_config(PB5, PIN_OUTPUT, PULL_NONE, 0);
-	gpio_write(PB5, 1);
+	gpio_config(PB5, PIN_OUTPUT, PULL_UP_18K, 0);
+	gpio_write(PB5, 1);  /* turn on LED */
 	/* Power button */
 	gpio_config(PC3, PIN_INPUT, PULL_UP_1M, 0);
+	gpio_wakeup(PC3, 1, 0);
+	GPIO->PC.ACT_AS_GPIO |= 1 << 3;
+	GPIO->PC.POL |= 1 << 3;    /* active low */
+	GPIO->PC.IRQ_EN |= 1 << 3;
 	/* SDA */
 	gpio_config(PC0, PIN_INPUT, PULL_UP_18K, 0);
 	/* SCL */
 	gpio_config(PC1, PIN_INPUT, PULL_UP_18K, 0);
 	/* ALERTN */
 	gpio_config(PD4, PIN_INPUT, PULL_UP_18K, 0);
+	gpio_wakeup(PD4, 1, 0);
 	GPIO->PD.ACT_AS_GPIO |= 1 << 4;
 	GPIO->PD.POL |= 1 << 4;    /* active low */
 	GPIO->PD.IRQ_EN |= 1 << 4;
 
 	/* PB4: Probably unconnected, PWM4 used as timer */
 
-	/* unclear GPIO */
-	/* Something todo with standby? */
-	gpio_config(PB6, PIN_OUTPUT, PULL_NONE, 0);
+	/* Triggers power down if 0 (with some delay) */
+	gpio_config(PB6, PIN_OUTPUT, PULL_UP_18K, 0);
 	gpio_write(PB6, 1);
-	/* ??? */
+	/* Unconnected ??? */
 	gpio_config(PC2, PIN_OUTPUT, PULL_NONE, 0);
-	/* ??? */
+	/* AZ3714 wakeup (pulse high to wake) */
 	gpio_config(PA1, PIN_OUTPUT, PULL_NONE, 0);
-	/* Maybe ALERTN? */
-	gpio_config(PC4, PIN_INPUT, PULL_UP_1M, 0);
-	/* ??? */
+	/* Unconnected ??? */
 	gpio_config(PB7, PIN_INPUT, PULL_NONE, 0);
-	/* FET-related? */
+	/* STX write (open-drain) */
 	gpio_config(PD2, PIN_OUTPUT, PULL_NONE, 0);
-	/* STX? */
+	/* STX read */
 	gpio_config(PD7, PIN_INOUT, PULL_NONE, 0);
-	/* Should be ALERTN */
+	/* Charger detection? */
 	gpio_config(PC4, PIN_INPUT, PULL_UP_1M, 0);
 }
 
@@ -459,6 +500,8 @@ void uart_init(void)
 	gpio_config(PA0, PIN_INPUT, PULL_UP_18K, 2 /* ALT_UART_RX */);
 	// UART_TX
 	gpio_config(PB1, PIN_INPUT, PULL_UP_18K, 1 /* ALT_UART_TX */);
+	GPIO->PB.ACT_AS_GPIO &= ~(1 << 1);
+	early_putchar = 0;
 
 	/* 16000000 / (9+1) / (13+1) => 114285 (115200) */
 	int clk_div = 9;
@@ -749,9 +792,15 @@ void deep_sleep(void)
 	uint8_t clksel_saved = SYSCTL->CLKSEL;
 	SYSCTL->CLKSEL = 0;  /* Select 24M RC OSC */
 
+	uint8_t systim_ctrl0 = SYSTIM->CTRL0;
+	SYSTIM->CTRL0 = SYSTIM_CTRL0_SUSPEND_BYPASS;
 
+	/* SYSCTL->WAKEUP_EN already defaults to 0x1f (I2C, SPI, USB, GPIO) */
+#if 0
 	areg_write(AREG_26_WAKEUP_EN, 0x50);  /* 32kHz timer, GPIO */
-
+#else
+	areg_write(AREG_26_WAKEUP_EN, 0x40);  /* 32kHz timer */
+#endif
 
 	/* From code path for deep sleep with SRAM retention */
 	areg_write(2, (areg_read(2) & ~7) | 5);
@@ -762,7 +811,14 @@ void deep_sleep(void)
 
 	areg_write(AREG_7F_SLEEP_MODE, 0);    /* 0: deep sleep; 1: suspend */
 
+	GPIO->PB.OUT |= (1 << 5);
 	sleep_start();  /* trigger sleep */
+	GPIO->PB.OUT &= ~(1 << 5);
+
+	SYSTIM->CTRL0 = 0;  /* errata? */
+	SYSTIM->CTRL0 = systim_ctrl0;
+	SYSTIM->CTRL1 = 1;
+	SYSTIM->IRQ_TICK = SYSTIM->TICK + 1000;
 
 	SYSCTL->CLKSEL = clksel_saved;
 	MCU->IRQMODE = irqmode_saved;
@@ -770,9 +826,18 @@ void deep_sleep(void)
 
 int main(void)
 {
+	/* UART_TX as GPIO */
+	gpio_config(PB1, PIN_OUTPUT, PULL_NONE, 0);
+	GPIO->PB.ACT_AS_GPIO |= (1 << 1);
+	early_putchar = 1;
 	/* Early turn-on of PB6 to keep the lights on */
 	GPIO->PB.OEN &= ~(1 << 6) & 0xff;
 	GPIO->PB.OUT |= 1 << 6;
+	GPIO->PB.ACT_AS_GPIO |= 1 << 6;
+	printf("Early hello world!\n");
+	/* Triggers power down if 0 (with some delay) */
+	gpio_config(PB6, PIN_OUTPUT, PULL_NONE, 0);
+	gpio_write(PB6, 1);
 	/* Early turn-on of blue indicator LED */
 	GPIO->PB.OEN &= ~(1 << 5) & 0xff;
 	GPIO->PB.OUT |= 1 << 5;
@@ -823,7 +888,7 @@ int main(void)
 
 			printf("\n%08x %08x Hello world!\n", (int)SYSTIM->TICK, read_sync_32k_timer());
 			int wakesrc = areg_read(0x44);
-			areg_write(0x44, wakesrc); /* ack/clear wakeup source */
+			areg_write(0x44, wakesrc); /* ack/clear */
 			int wakesrc2 = areg_read(0x44);
 			int wakeen = areg_read(0x26);
 			printf("wkupsrc: %02x->%02x wken: %02x\n", wakesrc, wakesrc2, wakeen);
@@ -852,18 +917,17 @@ int main(void)
 			wake32k += 64000;
 			write_32k_timer(wake32k);
 			if (ctr > 4) {
+#if 0
 				printf("stall (msk:%08x): ", (int)SYSCTL->MCU_WAKEUP_MASK);
-#if 1
-				/* Stall using timer0 works */
 				printf("%d ticks\n", stall_wakeup_by_timer0(8000000));
 #else
-				/* Deep sleep doesn't work yet */
-				areg_write(0x44, 0xf); /* ack/clear wakeup source */
+				areg_write(0x44, 0xf); /* ack/clear */
 				int tstart = SYSTIM->TICK;
 				deep_sleep();
 				int tend = SYSTIM->TICK;
+				int wake_cause = areg_read(0x44) & 0xf;
 				delay_micros(10);
-				printf("Slept %d ticks (skipped:%d)\n", tend - tstart, skipped_sleep);
+				printf("Slept %d ticks (skipped:%d; cause:%1x)\n", tend - tstart, skipped_sleep, wake_cause);
 #endif
 			}
 		}
