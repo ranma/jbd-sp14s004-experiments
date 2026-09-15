@@ -11,6 +11,9 @@
 	.global __modsi3
 	.global __udivsi3
 	.global __umodsi3
+
+	.global setjmp
+	.global longjmp
 	.global bitbang_char
 
 	.org 0
@@ -133,6 +136,59 @@ __modsi3:
 	.align	4
 .LDIVREG:
 	.word(0x800660)
+
+	/* r0: ptr */
+setjmp:
+	tstorer r1, [r0, #0x04]
+	tstorer r2, [r0, #0x08]
+	tstorer r3, [r0, #0x0c]
+	tstorer r4, [r0, #0x10]
+	tstorer r5, [r0, #0x14]
+	tstorer r6, [r0, #0x18]
+	tstorer r7, [r0, #0x1c]
+	tmov	r1, r8
+	tmov	r2, r9
+	tmov	r3, r10
+	tmov	r4, r11
+	tmov	r5, r12
+	tmov	r6, sp
+	tmov	r7, lr
+	tstorer r1, [r0, #0x20]
+	tstorer r2, [r0, #0x24]
+	tstorer r3, [r0, #0x28]
+	tstorer r4, [r0, #0x2c]
+	tstorer r5, [r0, #0x30]
+	tstorer r6, [r0, #0x34]
+	tstorer r7, [r0, #0x38]
+	tmov	r0, #0
+	tjex	lr
+
+	/* r0: ptr, r1: val */
+longjmp:
+	tstorer r1, [r0, #0x00]
+	tloadr r7, [r0, #0x38]
+	tloadr r6, [r0, #0x34]
+	tloadr r5, [r0, #0x30]
+	tloadr r4, [r0, #0x2c]
+	tloadr r3, [r0, #0x28]
+	tloadr r2, [r0, #0x24]
+	tloadr r1, [r0, #0x20]
+	tmov	lr, r7
+	tmov	sp, r6
+	tmov	r12, r5
+	tmov	r11, r4
+	tmov	r10, r3
+	tmov	r9, r2
+	tmov	r8, r1
+	tloadr r7, [r0, #0x1c]
+	tloadr r6, [r0, #0x18]
+	tloadr r5, [r0, #0x14]
+	tloadr r4, [r0, #0x10]
+	tloadr r3, [r0, #0x0c]
+	tloadr r2, [r0, #0x08]
+	tloadr r1, [r0, #0x04]
+	tloadr r0, [r0, #0x00]
+	tjex	lr
 
 	/* r0: char (incl. stop bit), r1: gpio_mask, r2: gpio_addr */
 bitbang_char:
