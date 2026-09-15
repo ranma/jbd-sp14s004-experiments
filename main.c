@@ -1,3 +1,4 @@
+#include <setjmp.h>
 #include "tlsr825x.h"
 #include "printf.h"
 
@@ -123,17 +124,12 @@ int read_sync_32k_timer(void)
 
 extern void bitbang_char(int ch, int gpio_mask, volatile uint8_t *gpio_addr);
 
-void bitbang_putchar(int c)
-{
-	bitbang_char(c | 0x100, (1 << 1), &GPIO->PB.OUT);
-}
-
 static int early_putchar;
 
 int putchar(int c)
 {
 	if (early_putchar) {
-		bitbang_putchar(c);
+		bitbang_char(c | 0x100, (1 << 1), &GPIO->PB.OUT);
 		return c;
 	}
 	while (!(UART->TXRX_STATUS & 1)); /* Wait for TX_DONE */
@@ -518,7 +514,7 @@ void uart_init(void)
 	uart_tx_buf.data[0] = 'H';
 	uart_tx_buf.data[1] = 'i';
 	uart_tx_buf.data[2] = '!';
-	uart_tx_buf.data[2] = '\n';
+	uart_tx_buf.data[3] = '\n';
 	DMA->TX_RDY |= (1 << 1); /* UART_TX channel */
 }
 
@@ -739,6 +735,8 @@ int stall_wakeup_by_timer0(int ticks)
 
 static int skipped_sleep;
 
+static jmp_buf sleep_jmp_buf;
+
 void sleep_start(void)
 {
 	uint8_t areg_34_saved = areg_read(0x34);
@@ -764,15 +762,20 @@ void sleep_start(void)
 	areg_write(AREG_82_CLK_SETTING, 0x0c);
 
 	/* TODO: possible errata requiring writing "tnop; tnop" (0x06c006c0) into ram location? */
-	if ((areg_read(AREG_44_STATUS) & 0xf) == 0) {
-		/* All wakeup sources are still quiet, go ahead. */
-		SYSCTL->PWDN_CTRL = 0x81; /* suspend mcu */
-		asm volatile (".rept 16\ntnop\n.endr\n");
-	} else {
-		skipped_sleep++;
-	}
+	if (setjmp(sleep_jmp_buf) == 0) {
+		if ((areg_read(AREG_44_STATUS) & 0xf) == 0) {
+			areg_write(AREG_39_DEEP_REG10, 0x5a);
+			/* All wakeup sources are still quiet, go ahead. */
+			SYSCTL->PWDN_CTRL = 0x81; /* suspend mcu */
+			asm volatile (".rept 16\ntnop\n.endr\n");
+		} else {
+			skipped_sleep++;
+		}
 
-	areg_write(AREG_82_CLK_SETTING, areg_82_saved);
+		areg_write(AREG_82_CLK_SETTING, areg_82_saved);
+	} else {
+		printf("wakeup (areg82 was %02x, is %02x)\n", areg_82_saved, areg_read(AREG_82_CLK_SETTING));
+	}
 
 	GPIO->PE.IE = 0xf;      /* Enable MSPI flash GPIO inputs */
 
@@ -780,8 +783,10 @@ void sleep_start(void)
 	MSPI->DATA = 0xab; /* NOR flash exit suspend */
 	while (MSPI->CTRL & MSPI_CTRL_BUSY);
 	MSPI->CTRL = 1;    /* CS high */
+	printf("woke flash\n");
 
 	areg_write(0x34, areg_34_saved); /* Power on baseband/USB/audio? */
+	printf("woke up\n");
 }
 
 void deep_sleep(void)
@@ -875,6 +880,12 @@ int main(void)
 		if ((i & 15) == 15) {
 			printf("\n");
 		}
+	}
+
+	if (areg_read(AREG_39_DEEP_REG10) == 0x5a) {
+		printf("longjmp()\n");
+		areg_write(AREG_39_DEEP_REG10, 0x5b);
+		longjmp(sleep_jmp_buf, 1);
 	}
 
 	int pd2_flag = 0;
