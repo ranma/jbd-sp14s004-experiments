@@ -1,3 +1,4 @@
+#include <alloca.h>
 #include <setjmp.h>
 #include "tlsr825x.h"
 #include "printf.h"
@@ -818,6 +819,7 @@ void deep_sleep(void)
 
 	GPIO->PB.OUT |= (1 << 5);
 	sleep_start();  /* trigger sleep */
+	printf("returned from sleep_start\n");
 	GPIO->PB.OUT &= ~(1 << 5);
 
 	SYSTIM->CTRL0 = 0;  /* errata? */
@@ -829,6 +831,8 @@ void deep_sleep(void)
 	MCU->IRQMODE = irqmode_saved;
 }
 
+volatile void *resumestack;
+
 int main(void)
 {
 	/* UART_TX as GPIO */
@@ -839,7 +843,6 @@ int main(void)
 	GPIO->PB.OEN &= ~(1 << 6) & 0xff;
 	GPIO->PB.OUT |= 1 << 6;
 	GPIO->PB.ACT_AS_GPIO |= 1 << 6;
-	printf("Early hello world!\n");
 	/* Triggers power down if 0 (with some delay) */
 	gpio_config(PB6, PIN_OUTPUT, PULL_NONE, 0);
 	gpio_write(PB6, 1);
@@ -862,10 +865,17 @@ int main(void)
 
 	SYSTIM->IRQ_TICK = SYSTIM->TICK + 1000;
 	SYSTIM->WAKEUP_TICK = SYSTIM->TICK + 100;
-	MCU->IRQMASK = MCU_IRQMASK_ENABLE
-	             | MCU_IRQMASK_GPIO
+	MCU->IRQMASK = MCU_IRQMASK_GPIO
 	             | MCU_IRQMASK_PMTIMER
 	             | MCU_IRQMASK_SYSTIMER;
+
+	if (areg_read(AREG_39_DEEP_REG10) == 0x5a) {
+		areg_write(AREG_39_DEEP_REG10, 0x5b);
+		longjmp(sleep_jmp_buf, 1);
+	}
+	resumestack = alloca(128); /* reserve stack space for resume path */
+
+	MCU->IRQMASK |= MCU_IRQMASK_ENABLE;
 	int tick32k = read_sync_32k_timer();
 	int wake32k = tick32k + 64000;
 	write_32k_timer(wake32k);
@@ -880,12 +890,6 @@ int main(void)
 		if ((i & 15) == 15) {
 			printf("\n");
 		}
-	}
-
-	if (areg_read(AREG_39_DEEP_REG10) == 0x5a) {
-		printf("longjmp()\n");
-		areg_write(AREG_39_DEEP_REG10, 0x5b);
-		longjmp(sleep_jmp_buf, 1);
 	}
 
 	int pd2_flag = 0;
