@@ -133,7 +133,9 @@ struct mcu_regs {
 	volatile uint32_t TMR_TICK0;         /* 0x630 */
 	volatile uint32_t TMR_TICK1;         /* 0x634 */
 	volatile uint32_t TMR_TICK2;         /* 0x638 */
-	uint8_t res0x63c[0x4];               /* 0x63c */
+	uint8_t res0x63c[0x2];               /* 0x63c */
+	volatile uint8_t BOOT_SEL;           /* 0x63e */
+	uint8_t res0x63f;                    /* 0x63f */
 	union {
 		volatile uint32_t IRQMASK;   /* 0x640 */
 		struct {
@@ -368,10 +370,10 @@ enum areg {
 	AREG_15_PD_PULL = 0x15,
 	AREG_1f_DCDC_RDLY1 = 0x1f, /* how long to wait for DCDC ready (16kHz count; default 0x40 -> 4ms) in deep-sleep wakeup */
 	/* 0x20: another delay? */
-	AREG_PA_POL = 0x21,      /* GPIOA polarity for wakeup */
-	AREG_PB_POL = 0x22,      /* GPIOB polarity for wakeup */
-	AREG_PC_POL = 0x23,      /* GPIOC polarity for wakeup */
-	AREG_PD_POL = 0x24,      /* GPIOD polarity for wakeup */
+	AREG_PA_POL = 0x21,      /* GPIOA polarity for wakeup; 0 = rising, 1 = falling */
+	AREG_PB_POL = 0x22,      /* GPIOB polarity for wakeup; 0 = rising, 1 = falling */
+	AREG_PC_POL = 0x23,      /* GPIOC polarity for wakeup; 0 = rising, 1 = falling */
+	AREG_PD_POL = 0x24,      /* GPIOD polarity for wakeup; 0 = rising, 1 = falling */
 	AREG_26_WAKEUP_EN = 0x26,   /* bit7: low-power comparator; bit6: 32kHz timer; bit5: usb core; bit4: gpio */
 	AREG_WAKEUP_PA = 0x27,
 	AREG_WAKEUP_PB = 0x28,
@@ -385,6 +387,16 @@ enum areg {
 	 * bit2: Audio power?
 	 */
 	AREG_34_PWR = 0x34,
+	/* retained in deep sleep, cleared by watchdog, sw or hw reset */
+	AREG_35_DEEP_REG6 = 0x35, /* 0x20 on reset */
+	AREG_36_DEEP_REG7 = 0x36,
+	AREG_37_DEEP_REG8 = 0x37,
+	AREG_38_DEEP_REG9 = 0x38,
+	AREG_39_DEEP_REG10 = 0x39,
+	/* retained in deep sleep and across wd/sw reset, cleared by hw reset */
+	AREG_3a_DEEP_REG0 = 0x3a, /* 0xff on reset; bit1: xtal failure if 0? */
+	AREG_3b_DEEP_REG1 = 0x3b,
+	AREG_3c_DEEP_REG2 = 0x3c,
 
 	/* bit0: woke from low-power comp
 	 * bit1: woke from 32kHz timer
